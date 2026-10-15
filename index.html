@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DDS SESMT · Acesso</title>
+  <meta name="theme-color" content="#0a4d32" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/app.css" />
+</head>
+<body>
+  <main class="login-page">
+    <section class="login-hero">
+      <div>
+        <div class="brand"><div class="brand-mark">DDS</div><div>Diálogo Diário de Segurança<small>SESMT · CD Drogasil Manaus</small></div></div>
+      </div>
+      <div>
+        <span class="tag">Segurança em primeiro lugar</span>
+        <h1 style="margin-top:14px">Participe do DDS e registre sua presença em segundos.</h1>
+        <p class="hide-sm">Leia o tema da semana, informe o código exibido pelo seu supervisor e assine eletronicamente. Sua assinatura fica registrada como evidência oficial do SESMT.</p>
+      </div>
+      <div class="hide-sm small" style="opacity:.7">Formulário de referência: FO-COR-SEG-001 · Lista de presença</div>
+    </section>
+
+    <section class="login-form-wrap">
+      <div class="login-card">
+        <div class="eyebrow">Acesso do colaborador</div>
+        <h1>Entrar</h1>
+        <p class="muted">Use sua <b>matrícula</b> como usuário e seu <b>CPF</b> como senha.</p>
+
+        <div id="aviso"></div>
+
+        <form id="formLogin" autocomplete="off" novalidate>
+          <div class="field">
+            <label for="matricula">Matrícula</label>
+            <input type="text" id="matricula" inputmode="numeric" placeholder="Ex.: 347436" required autofocus />
+          </div>
+          <div class="field">
+            <label for="cpf">CPF (senha)</label>
+            <div class="row" style="flex-wrap:nowrap">
+              <input type="password" id="cpf" inputmode="numeric" placeholder="000.000.000-00" required />
+              <button type="button" class="btn btn-ghost" id="verCpf" aria-label="Mostrar CPF" title="Mostrar/ocultar">👁</button>
+            </div>
+          </div>
+          <button class="btn btn-lg btn-block" id="btnEntrar" type="submit">Entrar</button>
+        </form>
+
+        <p class="hint" style="margin-top:18px">Problemas para acessar? Procure o SESMT do CD. Seus dados são usados apenas para o registro de presença nos treinamentos de segurança.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="assets/js/config.js"></script>
+  <script src="assets/js/app.js"></script>
+  <script>
+    (function () {
+      const { $, rpc, store, msgErro, destinoPorPerfil, mascaraCPF, comLoading } = DDS;
+      const params = new URLSearchParams(location.search);
+      const codigo = (params.get("codigo") || "").replace(/\D/g, "");
+      const destinoFinal = (perfil) => codigo ? `colaborador.html?codigo=${codigo}` : destinoPorPerfil(perfil);
+
+      const aviso = (txt, tipo) => { $("#aviso").innerHTML = txt ? `<div class="alert alert-${tipo || "danger"}">${DDS.esc(txt)}</div>` : ""; };
+      if (params.get("expirou")) aviso("Sua sessão expirou. Entre novamente.", "warn");
+      if (codigo) aviso(`Entre para assinar a presença do DDS (código ${codigo}).`, "info");
+
+      // Já logado? segue direto
+      const s = store.get();
+      if (s && s.token && s.usuario) {
+        rpc("me", { p_token: s.token }).then((me) => location.replace(destinoFinal(me.perfil))).catch(() => store.clear());
+      }
+
+      mascaraCPF($("#cpf"));
+      $("#verCpf").onclick = () => { const i = $("#cpf"); i.type = i.type === "password" ? "text" : "password"; };
+
+      $("#formLogin").addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        const mat = $("#matricula").value.trim(), cpf = $("#cpf").value.trim();
+        if (!mat || cpf.replace(/\D/g, "").length < 11) { aviso("Informe a matrícula e o CPF completo (11 dígitos)."); return; }
+        comLoading($("#btnEntrar"), async () => {
+          try {
+            const r = await rpc("login", { p_matricula: mat, p_cpf: cpf, p_user_agent: navigator.userAgent });
+            if (r.erro) { aviso(msgErro({ code: r.erro })); return; }
+            store.set({ token: r.token, usuario: r.usuario });
+            location.href = destinoFinal(r.usuario.perfil);
+          } catch (e) { aviso(msgErro(e)); }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

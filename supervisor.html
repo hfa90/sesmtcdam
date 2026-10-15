@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DDS · Supervisor</title>
+  <meta name="theme-color" content="#0a4d32" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/app.css" />
+</head>
+<body>
+  <main class="container">
+    <div class="page-head">
+      <div><div class="eyebrow">Supervisor</div><h1>Conduzir DDS</h1><div class="muted small" id="equipeInfo"></div></div>
+      <button class="btn btn-accent btn-lg" id="btnNovo">+ Iniciar DDS</button>
+    </div>
+
+    <div class="grid grid-3" id="kpis"></div>
+
+    <section class="card hidden" id="cardAtivo" style="margin-top:16px"></section>
+
+    <section class="card" style="margin-top:16px">
+      <div class="card-head"><h3>Meus DDS</h3><span class="muted small">Últimos 120 dias</span></div>
+      <div id="lista"><div class="empty"><span class="spinner"></span></div></div>
+    </section>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="assets/js/config.js"></script>
+  <script src="assets/js/app.js"></script>
+  <script src="assets/js/supervisor.js"></script>
+</body>
+</html>

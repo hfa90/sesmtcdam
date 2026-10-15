@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DDS · Minha presença</title>
+  <meta name="theme-color" content="#0a4d32" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/app.css" />
+</head>
+<body>
+  <main class="container narrow">
+    <div id="saudacao" class="page-head"></div>
+
+    <!-- Assinar presença -->
+    <section class="card" id="cardAssinar">
+      <div class="eyebrow">Registrar presença</div>
+      <h2>Digite o código do DDS</h2>
+      <p class="muted small">O código de 6 dígitos é exibido pelo seu supervisor durante a reunião (ou escaneie o QR Code).</p>
+      <form id="formCodigo" class="row" style="flex-wrap:nowrap">
+        <input type="text" id="codigo" class="code-input" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="one-time-code" />
+        <button class="btn btn-lg" id="btnBuscar" type="submit">Abrir</button>
+      </form>
+    </section>
+
+    <!-- Fluxo de assinatura -->
+    <section class="card hidden" id="cardFluxo"></section>
+
+    <!-- Tema da semana -->
+    <section class="card" id="cardTema">
+      <div class="eyebrow">Tema da semana</div>
+      <div id="temaSemana"><div class="empty"><span class="spinner"></span></div></div>
+    </section>
+
+    <!-- Histórico -->
+    <section class="card">
+      <div class="card-head"><h3>Minhas participações</h3></div>
+      <div id="historico"><div class="empty"><span class="spinner"></span></div></div>
+    </section>
+  </main>
+  <footer class="foot">SESMT · CD Drogasil Manaus · Assinatura eletrônica com registro de data, hora e código de integridade</footer>
+
+  <script src="assets/js/config.js"></script>
+  <script src="assets/js/app.js"></script>
+  <script src="assets/js/colaborador.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# Dados pessoais de colaboradores NUNCA devem ir para o repositório
+*.xlsx
+*.xls
+*.csv
+*seed*.sql
+*CONFIDENCIAL*
+.DS_Store
+node_modules/
