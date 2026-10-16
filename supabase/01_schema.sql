@@ -129,6 +129,39 @@ create table if not exists public.assinaturas (
 create index if not exists idx_ass_reuniao on public.assinaturas(reuniao_id);
 create index if not exists idx_ass_colab on public.assinaturas(colaborador_id);
 
+-- v2: foto facial capturada no momento da assinatura (assinatura secundária)
+alter table public.assinaturas add column if not exists foto text;   -- JPEG (data URL)
+
+-- Foto de referência de cada colaborador (1ª assinatura ou cadastro pelo SESMT).
+-- Histórico preservado: uma nova referência apenas desativa a anterior.
+create table if not exists public.fotos_referencia (
+  id              bigint generated always as identity primary key,
+  colaborador_id  uuid not null references public.colaboradores(id) on delete restrict,
+  foto            text not null,
+  origem          text not null check (origem in ('primeira_assinatura','cadastro_sesmt','assinatura_validada')),
+  ativo           boolean not null default true,
+  criado_por      uuid references public.colaboradores(id) on delete restrict,
+  criado_em       timestamptz not null default now()
+);
+create unique index if not exists uq_foto_ref_ativa on public.fotos_referencia(colaborador_id) where ativo;
+
+-- Conferência visual (humana) da foto da assinatura x foto de referência
+create table if not exists public.verificacoes_faciais (
+  id              bigint generated always as identity primary key,
+  assinatura_id   uuid not null references public.assinaturas(id) on delete restrict,
+  status          text not null check (status in ('confirmada','divergente')),
+  observacao      text,
+  verificado_por  uuid not null references public.colaboradores(id) on delete restrict,
+  verificado_em   timestamptz not null default now()
+);
+create index if not exists idx_verif_ass on public.verificacoes_faciais(assinatura_id, verificado_em desc);
+
+create table if not exists public.configuracoes (
+  chave  text primary key,
+  valor  text not null
+);
+insert into public.configuracoes(chave, valor) values ('foto_obrigatoria', 'true') on conflict do nothing;
+
 -- ---------------------------------------------------------------------
 -- PROTEÇÃO DAS EVIDÊNCIAS
 --  * assinaturas não podem ser alteradas nem apagadas
@@ -152,6 +185,22 @@ drop trigger if exists trg_historico_imutavel on public.colaboradores_historico;
 create trigger trg_historico_imutavel before update or delete on public.colaboradores_historico
   for each row execute function public._bloquear_alteracao();
 
+drop trigger if exists trg_verificacoes_imutaveis on public.verificacoes_faciais;
+create trigger trg_verificacoes_imutaveis before update or delete on public.verificacoes_faciais
+  for each row execute function public._bloquear_alteracao();
+
+create or replace function public._foto_ref_protegida() returns trigger
+language plpgsql as $$
+begin
+  if tg_op = 'DELETE' or new.foto <> old.foto or new.colaborador_id <> old.colaborador_id then
+    raise exception 'EVIDENCIA_PROTEGIDA: fotos de referência não podem ser alteradas/excluídas';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_foto_ref_protegida on public.fotos_referencia;
+create trigger trg_foto_ref_protegida before update or delete on public.fotos_referencia
+  for each row execute function public._foto_ref_protegida();
+
 -- Reunião encerrada com assinaturas não pode ser excluída (FK restrict já garante)
 
 -- ---------------------------------------------------------------------
@@ -168,12 +217,37 @@ alter table public.supervisor_setores       enable row level security;
 alter table public.temas                    enable row level security;
 alter table public.reunioes                 enable row level security;
 alter table public.assinaturas              enable row level security;
+alter table public.fotos_referencia         enable row level security;
+alter table public.verificacoes_faciais     enable row level security;
+alter table public.configuracoes            enable row level security;
 
 revoke all on all tables in schema public from anon, authenticated;
 
 -- ---------------------------------------------------------------------
 -- FUNÇÕES AUXILIARES (internas)
 -- ---------------------------------------------------------------------
+-- v2: remove assinaturas antigas de funções que ganharam parâmetros (foto facial)
+drop function if exists public._registrar_assinatura(public.colaboradores, uuid, text, text, text);
+drop function if exists public.assinar(text, uuid, text, text, text);
+drop function if exists public.sup_assinar_quiosque(text, uuid, text, text, text, text);
+drop function if exists public.reuniao_detalhe(text, uuid);
+
+create or replace function public._config(p_chave text) returns text
+language sql stable security definer set search_path = public as $$
+  select valor from public.configuracoes where chave = p_chave
+$$;
+
+create or replace function public._foto_ref(p_colab uuid) returns text
+language sql stable security definer set search_path = public as $$
+  select foto from public.fotos_referencia where colaborador_id = p_colab and ativo
+$$;
+
+create or replace function public._definir_foto_ref(p_colab uuid, p_foto text, p_origem text, p_por uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  update public.fotos_referencia set ativo = false where colaborador_id = p_colab and ativo;
+  insert into public.fotos_referencia(colaborador_id, foto, origem, criado_por) values (p_colab, p_foto, p_origem, p_por);
+end $$;
 create or replace function public._hoje() returns date
 language sql stable as $$ select (now() at time zone 'America/Manaus')::date $$;
 
@@ -309,11 +383,18 @@ begin
 end $$;
 
 create or replace function public._registrar_assinatura(c public.colaboradores, p_reuniao_id uuid,
-  p_assinatura text, p_metodo text, p_user_agent text)
+  p_assinatura text, p_foto text, p_metodo text, p_user_agent text)
 returns jsonb
 language plpgsql security definer set search_path = public, extensions as $$
 declare r public.reunioes; v_now timestamptz := now(); v_hash text; v_id uuid;
+        v_ref text := public._foto_ref(c.id); v_primeira boolean := false;
 begin
+  if nullif(p_foto, '') is null then
+    if coalesce(public._config('foto_obrigatoria'), 'true') = 'true' then raise exception 'FOTO_OBRIGATORIA'; end if;
+    p_foto := null;
+  elsif left(p_foto, 23) <> 'data:image/jpeg;base64,' or length(p_foto) > 400000 then
+    raise exception 'FOTO_INVALIDA';
+  end if;
   select * into r from public.reunioes where id = p_reuniao_id;
   if not found then raise exception 'REUNIAO_NAO_ENCONTRADA'; end if;
   if r.status <> 'aberta' then raise exception 'REUNIAO_ENCERRADA'; end if;
@@ -326,16 +407,23 @@ begin
   end if;
 
   v_hash := encode(digest(concat_ws('|', r.id::text, r.tema_id::text, c.id::text, c.matricula, c.nome,
-                   extract(epoch from v_now)::text, p_assinatura), 'sha256'), 'hex');
+                   extract(epoch from v_now)::text, p_assinatura, coalesce(p_foto, '')), 'sha256'), 'hex');
 
   insert into public.assinaturas(reuniao_id, tema_id, colaborador_id, matricula, nome, cargo, setor,
-                                 assinatura, metodo, assinado_em, user_agent, hash_integridade)
+                                 assinatura, foto, metodo, assinado_em, user_agent, hash_integridade)
   values (r.id, r.tema_id, c.id, c.matricula, c.nome, c.cargo, c.setor,
-          p_assinatura, p_metodo, v_now, left(p_user_agent, 300), v_hash)
+          p_assinatura, p_foto, p_metodo, v_now, left(p_user_agent, 300), v_hash)
   returning id into v_id;
 
-  return jsonb_build_object('id', v_id, 'nome', c.nome, 'matricula', c.matricula,
-                            'assinado_em', v_now, 'hash', v_hash);
+  -- primeira foto do colaborador vira a referência para as próximas conferências
+  if p_foto is not null and v_ref is null then
+    perform public._definir_foto_ref(c.id, p_foto, 'primeira_assinatura', null);
+    v_primeira := true;
+  end if;
+
+  return jsonb_build_object('id', v_id, 'nome', c.nome, 'matricula', c.matricula, 'cargo', c.cargo,
+                            'assinado_em', v_now, 'hash', v_hash,
+                            'primeira_foto', v_primeira, 'foto_referencia', v_ref);
 end $$;
 
 -- ---------------------------------------------------------------------
@@ -419,19 +507,22 @@ begin
                                   'local', r.local, 'supervisor_nome', r.supervisor_nome),
     'tema', jsonb_build_object('id', t.id, 'titulo', t.titulo, 'conteudo', t.conteudo, 'objetivo', t.objetivo,
                                'material_url', t.material_url, 'tipo', t.tipo),
-    'ja_assinou', exists(select 1 from public.assinaturas where tema_id = t.id and colaborador_id = c.id)
+    'ja_assinou', exists(select 1 from public.assinaturas where tema_id = t.id and colaborador_id = c.id),
+    'foto_obrigatoria', coalesce(public._config('foto_obrigatoria'), 'true') = 'true',
+    'tem_referencia', public._foto_ref(c.id) is not null
   );
 end $$;
 
 create or replace function public.assinar(p_token text, p_reuniao_id uuid, p_codigo text,
-  p_assinatura text, p_user_agent text default null) returns jsonb
+  p_assinatura text, p_foto text default null, p_user_agent text default null) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare c public.colaboradores := public._sessao(p_token);
 begin
   if not exists (select 1 from public.reunioes where id = p_reuniao_id and codigo = public._so_digitos(p_codigo)) then
     raise exception 'CODIGO_INVALIDO';
   end if;
-  return public._registrar_assinatura(c, p_reuniao_id, p_assinatura, 'proprio_dispositivo', p_user_agent);
+  return public._registrar_assinatura(c, p_reuniao_id, p_assinatura, p_foto, 'proprio_dispositivo', p_user_agent)
+         - 'foto_referencia';
 end $$;
 
 create or replace function public.minhas_assinaturas(p_token text) returns jsonb
@@ -465,6 +556,7 @@ begin
                from public.reunioes r join public.temas t on t.id = r.tema_id
                where r.supervisor_id = c.id and r.data >= public._hoje() - 120), '[]'::jsonb),
     'setores', coalesce((select jsonb_agg(setor order by setor) from public.supervisor_setores where supervisor_id = c.id), '[]'::jsonb),
+    'foto_obrigatoria', coalesce(public._config('foto_obrigatoria'), 'true') = 'true',
     'equipe_total', (select count(*) from public._equipe(c.id, public._hoje(), public._hoje()) e where e.ativo)
   );
 end $$;
@@ -491,7 +583,15 @@ begin
   return jsonb_build_object('id', v_id, 'codigo', v_cod);
 end $$;
 
-create or replace function public.reuniao_detalhe(p_token text, p_reuniao_id uuid) returns jsonb
+create or replace function public.reuniao_contagem(p_token text, p_reuniao_id uuid) returns int
+language plpgsql security definer set search_path = public as $$
+declare c public.colaboradores := public._sessao(p_token, array['supervisor','admin']);
+begin
+  return (select count(*) from public.assinaturas a join public.reunioes r on r.id = a.reuniao_id
+           where r.id = p_reuniao_id and (c.perfil = 'admin' or r.supervisor_id = c.id));
+end $$;
+
+create or replace function public.reuniao_detalhe(p_token text, p_reuniao_id uuid, p_imagens boolean default true) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare c public.colaboradores := public._sessao(p_token, array['supervisor','admin']);
         r public.reunioes; t public.temas;
@@ -504,7 +604,12 @@ begin
     'reuniao', to_jsonb(r),
     'tema', to_jsonb(t),
     'assinaturas', coalesce((select jsonb_agg(jsonb_build_object('id', a.id, 'matricula', a.matricula, 'nome', a.nome,
-                    'cargo', a.cargo, 'setor', a.setor, 'assinatura', a.assinatura, 'metodo', a.metodo,
+                    'cargo', a.cargo, 'setor', a.setor, 'metodo', a.metodo,
+                    'assinatura', case when p_imagens then a.assinatura end,
+                    'foto', case when p_imagens then a.foto end,
+                    'tem_foto', a.foto is not null,
+                    'verificacao', (select v.status from public.verificacoes_faciais v where v.assinatura_id = a.id
+                                     order by v.verificado_em desc limit 1),
                     'assinado_em', a.assinado_em, 'hash', a.hash_integridade) order by a.assinado_em)
                     from public.assinaturas a where a.reuniao_id = r.id), '[]'::jsonb),
     'pendentes', coalesce((select jsonb_agg(jsonb_build_object('matricula', e.matricula, 'nome', e.nome,
@@ -515,8 +620,10 @@ begin
   );
 end $$;
 
-create or replace function public.sup_assinar_quiosque(p_token text, p_reuniao_id uuid, p_matricula text,
-  p_cpf text, p_assinatura text, p_user_agent text default null) returns jsonb
+-- Quiosque, passo 1: identifica o colaborador (matrícula + CPF) e devolve a foto de referência
+-- para o supervisor comparar visualmente antes da assinatura.
+create or replace function public.sup_identificar(p_token text, p_reuniao_id uuid, p_matricula text, p_cpf text)
+returns jsonb
 language plpgsql security definer set search_path = public, extensions as $$
 declare s public.colaboradores := public._sessao(p_token, array['supervisor','admin']);
         c public.colaboradores; r public.reunioes;
@@ -529,7 +636,27 @@ begin
     raise exception 'CREDENCIAIS_INVALIDAS';
   end if;
   if not c.ativo then raise exception 'DESLIGADO'; end if;
-  return public._registrar_assinatura(c, p_reuniao_id, p_assinatura, 'quiosque', p_user_agent);
+  return jsonb_build_object('nome', c.nome, 'matricula', c.matricula, 'cargo', c.cargo, 'setor', c.setor,
+    'foto_referencia', public._foto_ref(c.id),
+    'ja_assinou', exists(select 1 from public.assinaturas where tema_id = r.tema_id and colaborador_id = c.id),
+    'foto_obrigatoria', coalesce(public._config('foto_obrigatoria'), 'true') = 'true');
+end $$;
+
+create or replace function public.sup_assinar_quiosque(p_token text, p_reuniao_id uuid, p_matricula text,
+  p_cpf text, p_assinatura text, p_foto text default null, p_user_agent text default null) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare s public.colaboradores := public._sessao(p_token, array['supervisor','admin']);
+        c public.colaboradores; r public.reunioes;
+begin
+  select * into r from public.reunioes where id = p_reuniao_id;
+  if not found then raise exception 'REUNIAO_NAO_ENCONTRADA'; end if;
+  if s.perfil <> 'admin' and r.supervisor_id <> s.id then raise exception 'ACESSO_NEGADO'; end if;
+  select * into c from public.colaboradores where matricula = public._norm_mat(p_matricula);
+  if not found or c.cpf_hash <> crypt(public._norm_cpf(p_cpf), c.cpf_hash) then
+    raise exception 'CREDENCIAIS_INVALIDAS';
+  end if;
+  if not c.ativo then raise exception 'DESLIGADO'; end if;
+  return public._registrar_assinatura(c, p_reuniao_id, p_assinatura, p_foto, 'quiosque', p_user_agent);
 end $$;
 
 create or replace function public.sup_encerrar_reuniao(p_token text, p_reuniao_id uuid, p_assinatura text)
@@ -626,7 +753,8 @@ begin
   return coalesce((select jsonb_agg(jsonb_build_object('id', x.id, 'matricula', x.matricula, 'nome', x.nome,
             'cargo', x.cargo, 'setor', x.setor, 'perfil', x.perfil, 'perfil_manual', x.perfil_manual,
             'ativo', x.ativo, 'incluido_em', x.incluido_em, 'desligado_em', x.desligado_em,
-            'assinaturas', (select count(*) from public.assinaturas a where a.colaborador_id = x.id))
+            'assinaturas', (select count(*) from public.assinaturas a where a.colaborador_id = x.id),
+            'tem_foto', exists(select 1 from public.fotos_referencia f where f.colaborador_id = x.id and f.ativo))
           order by x.nome) from public.colaboradores x), '[]'::jsonb);
 end $$;
 
@@ -862,6 +990,99 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
+-- RPC: VERIFICAÇÃO FACIAL (conferência visual, sem IA)
+-- ---------------------------------------------------------------------
+create or replace function public.adm_verificacao_facial(p_token text, p_tema_id uuid default null,
+  p_status text default 'pendente', p_limite int default 60) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare c public.colaboradores := public._sessao(p_token, array['admin']);
+begin
+  return jsonb_build_object(
+    'resumo', (select jsonb_build_object(
+        'total', count(*),
+        'com_foto', count(*) filter (where a.foto is not null),
+        'confirmadas', count(*) filter (where v.status = 'confirmada'),
+        'divergentes', count(*) filter (where v.status = 'divergente'),
+        'pendentes', count(*) filter (where a.foto is not null and v.status is null))
+      from public.assinaturas a
+      left join lateral (select status from public.verificacoes_faciais x where x.assinatura_id = a.id
+                         order by x.verificado_em desc limit 1) v on true
+      where p_tema_id is null or a.tema_id = p_tema_id),
+    'itens', coalesce((select jsonb_agg(z) from (
+      select jsonb_build_object('id', a.id, 'nome', a.nome, 'matricula', a.matricula, 'setor', a.setor, 'cargo', a.cargo,
+        'colaborador_id', a.colaborador_id, 'foto', a.foto, 'foto_referencia', public._foto_ref(a.colaborador_id),
+        'assinatura', a.assinatura, 'metodo', a.metodo, 'assinado_em', a.assinado_em, 'tema', t.titulo,
+        'supervisor', r.supervisor_nome, 'data', r.data, 'status', v.status, 'observacao', v.observacao,
+        'verificado_por', v.por, 'verificado_em', v.verificado_em) z
+      from public.assinaturas a
+      join public.reunioes r on r.id = a.reuniao_id
+      join public.temas t on t.id = a.tema_id
+      left join lateral (select x.status, x.observacao, x.verificado_em, p.nome por from public.verificacoes_faciais x
+                         left join public.colaboradores p on p.id = x.verificado_por
+                         where x.assinatura_id = a.id order by x.verificado_em desc limit 1) v on true
+      where (p_tema_id is null or a.tema_id = p_tema_id)
+        and a.foto is not null
+        and (p_status is null or p_status = '' or (p_status = 'pendente' and v.status is null) or v.status = p_status)
+      order by a.assinado_em desc
+      limit greatest(1, least(p_limite, 200))) q), '[]'::jsonb)
+  );
+end $$;
+
+create or replace function public.adm_verificar(p_token text, p_assinaturas uuid[], p_status text, p_observacao text default null)
+returns int
+language plpgsql security definer set search_path = public as $$
+declare c public.colaboradores := public._sessao(p_token, array['admin']); n int;
+begin
+  if p_status not in ('confirmada','divergente') then raise exception 'STATUS_INVALIDO'; end if;
+  insert into public.verificacoes_faciais(assinatura_id, status, observacao, verificado_por)
+  select a.id, p_status, nullif(trim(p_observacao),''), c.id from public.assinaturas a where a.id = any(p_assinaturas);
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+-- SESMT cadastra/atualiza a foto de referência (com a câmera, presencialmente)
+create or replace function public.adm_foto_referencia(p_token text, p_colaborador_id uuid, p_foto text default null,
+  p_assinatura_id uuid default null) returns void
+language plpgsql security definer set search_path = public as $$
+declare c public.colaboradores := public._sessao(p_token, array['admin']); v_foto text := p_foto; v_origem text := 'cadastro_sesmt';
+begin
+  if p_assinatura_id is not null then
+    select foto into v_foto from public.assinaturas where id = p_assinatura_id and colaborador_id = p_colaborador_id;
+    v_origem := 'assinatura_validada';
+  end if;
+  if v_foto is null or left(v_foto, 23) <> 'data:image/jpeg;base64,' or length(v_foto) > 400000 then
+    raise exception 'FOTO_INVALIDA';
+  end if;
+  perform public._definir_foto_ref(p_colaborador_id, v_foto, v_origem, c.id);
+  perform public._log(p_colaborador_id, 'foto_referencia', null, v_origem, 'manual', c.id);
+end $$;
+
+create or replace function public.adm_colaborador_foto(p_token text, p_colaborador_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare c public.colaboradores := public._sessao(p_token, array['admin']);
+begin
+  return jsonb_build_object('foto', public._foto_ref(p_colaborador_id),
+    'historico', coalesce((select jsonb_agg(jsonb_build_object('origem', f.origem, 'ativo', f.ativo, 'em', f.criado_em) order by f.criado_em desc)
+                  from public.fotos_referencia f where f.colaborador_id = p_colaborador_id), '[]'::jsonb));
+end $$;
+
+create or replace function public.adm_config_salvar(p_token text, p_chave text, p_valor text) returns void
+language plpgsql security definer set search_path = public as $$
+declare c public.colaboradores := public._sessao(p_token, array['admin']);
+begin
+  if p_chave not in ('foto_obrigatoria') then raise exception 'CONFIG_INVALIDA'; end if;
+  insert into public.configuracoes(chave, valor) values (p_chave, p_valor)
+  on conflict (chave) do update set valor = excluded.valor;
+end $$;
+
+create or replace function public.adm_config(p_token text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare c public.colaboradores := public._sessao(p_token, array['admin']);
+begin
+  return coalesce((select jsonb_object_agg(chave, valor) from public.configuracoes), '{}'::jsonb);
+end $$;
+
+-- ---------------------------------------------------------------------
 -- PERMISSÕES: funções internas (prefixo "_") ficam inacessíveis à API
 -- ---------------------------------------------------------------------
 do $$
@@ -880,7 +1101,9 @@ begin
              'sup_excluir_reuniao','adm_temas','adm_tema_salvar','adm_tema_excluir','adm_colaboradores',
              'adm_colaborador_salvar','adm_colaborador_status','adm_importar','adm_historico','adm_importacoes',
              'adm_equipes','adm_equipe_salvar','adm_dashboard','adm_evolucao','adm_reunioes','adm_assinaturas',
-             'adm_pendentes','adm_reabrir_reuniao') loop
+             'adm_pendentes','adm_reabrir_reuniao',
+             'reuniao_contagem','sup_identificar','adm_verificacao_facial','adm_verificar','adm_foto_referencia',
+             'adm_colaborador_foto','adm_config_salvar','adm_config') loop
     execute format('revoke all on function %s from public', f.sig);
     execute format('grant execute on function %s to anon, authenticated', f.sig);
   end loop;

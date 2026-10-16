@@ -9,6 +9,7 @@
   const primeiroNome = (me.nome || "").split(" ")[0];
   $("#saudacao").innerHTML = `<div><div class="eyebrow">Olá, ${esc(primeiroNome.charAt(0).toUpperCase() + primeiroNome.slice(1).toLowerCase())}</div>
     <h1>Minha presença no DDS</h1><div class="muted small">${esc(me.cargo || "")} · ${esc(me.setor || "")}</div></div>`;
+  DDS.pronto();
 
   // ---------- Tema da semana ----------
   async function carregarTema() {
@@ -42,7 +43,7 @@
 
   // ---------- Fluxo: código -> leitura -> assinatura ----------
   const fluxo = $("#cardFluxo");
-  let pad = null;
+  let pad = null, cam = null;
 
   async function abrirCodigo(codigo) {
     const r = await call("buscar_reuniao", { p_codigo: codigo });
@@ -61,21 +62,27 @@
       ${r.tema.objetivo ? `<p><b>Objetivo:</b> ${esc(r.tema.objetivo)}</p>` : ""}
       <div class="tema-box" style="max-height:280px;overflow:auto">${esc(r.tema.conteudo)}</div>
       ${r.tema.material_url ? `<p style="margin-top:10px"><a href="${esc(r.tema.material_url)}" target="_blank" rel="noopener">📎 Material de apoio</a></p>` : ""}
-      <div style="margin:18px 0 8px"><label>Sua assinatura</label><div id="pad"></div>
+      <div style="margin:20px 0 8px"><label>1. Foto de verificação ${r.foto_obrigatoria ? "(obrigatória)" : "(opcional)"}</label>
+        ${r.tem_referencia ? "" : `<div class="alert alert-info small">Esta será sua <b>foto de referência</b> para os próximos DDS.</div>`}
+        <div id="cam"></div></div>
+      <div style="margin:18px 0 8px"><label>2. Sua assinatura</label><div id="pad"></div>
         <div class="row" style="margin-top:6px"><button type="button" class="btn btn-ghost btn-sm" id="limpar">Limpar</button></div></div>
       <label class="check" style="margin:14px 0"><input type="checkbox" id="declaro" />
-        <span>Eu, <b>${esc(me.nome)}</b> (matrícula ${esc(me.matricula)}), declaro que participei deste DDS e compreendi as orientações de segurança apresentadas.</span></label>
+        <span>Eu, <b>${esc(me.nome)}</b> (matrícula ${esc(me.matricula)}), declaro que participei deste DDS, compreendi as orientações de segurança apresentadas e autorizo o registro da minha imagem exclusivamente como comprovação de presença.</span></label>
       <div class="row"><button class="btn btn-ghost" id="cancelar">Cancelar</button>
         <button class="btn btn-lg" id="confirmar" style="flex:1">Assinar presença</button></div>`;
     pad = SignaturePad($("#pad"));
+    cam = DDS.FaceCapture($("#cam"), { legenda: () => `DDS ${r.reuniao.codigo} · Mat. ${me.matricula} · ${DDS.fmtDataHora(new Date().toISOString())}` });
     $("#limpar").onclick = () => pad.limpar();
     $("#cancelar").onclick = resetar;
     $("#confirmar").onclick = (ev) => {
-      if (!$("#declaro").checked) { toast("Marque a declaração de participação.", "err"); return; }
+      if (r.foto_obrigatoria && !cam.foto()) { toast("Tire a foto de verificação antes de assinar.", "err"); $("#cam").scrollIntoView({ behavior: "smooth", block: "center" }); return; }
       if (pad.vazio()) { toast("Desenhe sua assinatura no quadro.", "err"); return; }
+      if (!$("#declaro").checked) { toast("Marque a declaração de participação.", "err"); return; }
       comLoading(ev.currentTarget, async () => {
         try {
-          const res = await call("assinar", { p_reuniao_id: r.reuniao.id, p_codigo: r.reuniao.codigo, p_assinatura: pad.paraPNG(), p_user_agent: navigator.userAgent });
+          const res = await call("assinar", { p_reuniao_id: r.reuniao.id, p_codigo: r.reuniao.codigo, p_assinatura: pad.paraPNG(), p_foto: cam.foto(), p_user_agent: navigator.userAgent });
+          cam.parar();
           fluxo.innerHTML = `<div class="success-burst"><div class="ic">✓</div><h2>Presença registrada!</h2>
             <p>${esc(r.tema.titulo)}</p><p class="muted small">${fmtDataHora(res.assinado_em)}</p>
             <p class="small muted">Código de integridade:<br><span class="mono">${esc(res.hash)}</span></p>
@@ -90,6 +97,7 @@
   }
 
   function resetar() {
+    if (cam) { cam.parar(); cam = null; }
     fluxo.classList.add("hidden"); fluxo.innerHTML = "";
     $("#cardAssinar").classList.remove("hidden"); $("#codigo").value = "";
   }

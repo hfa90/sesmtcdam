@@ -33,6 +33,9 @@
     NAO_PODE_ALTERAR_PROPRIO_ACESSO: "Você não pode remover o seu próprio acesso de administradora.",
     SO_REUNIOES_DE_HOJE: "Só é possível reabrir DDS realizados hoje.",
     EVIDENCIA_PROTEGIDA: "Registro protegido: evidências não podem ser alteradas.",
+    FOTO_OBRIGATORIA: "A foto de verificação é obrigatória. Tire a foto antes de assinar.",
+    FOTO_INVALIDA: "Foto inválida. Tire a foto novamente.",
+    STATUS_INVALIDO: "Status de verificação inválido.",
     FALHA_REDE: "Sem conexão com o servidor. Verifique a internet e tente novamente.",
   };
   function msgErro(e) {
@@ -197,13 +200,15 @@
     el.className = "topbar";
     const nav = (links || []).map((l) => `<a href="${l.href}">${esc(l.label)}</a>`).join("");
     el.innerHTML = `
-      <div class="brand"><div class="brand-mark">DDS</div><div>Diálogo de Segurança<small>${esc(CONFIG.SETOR)} · ${esc(CONFIG.UNIDADE)}</small></div></div>
+      <div class="brand"><img class="brand-mark" src="assets/icons/icon-96.png" alt=""><div>Diálogo de Segurança<small>${esc(CONFIG.SETOR)} · ${esc(CONFIG.UNIDADE)}</small></div></div>
       <nav class="topnav">${nav}</nav>
       <div class="spacer"></div>
       <div class="user-chip"><b>${esc(usuario.nome)}</b>Mat. ${esc(usuario.matricula)} · ${esc(perfilLabel(usuario.perfil))}</div>
+      ${window.DDS_STANDALONE ? "" : `<button class="btn btn-ghost btn-sm" data-instalar title="Instalar o app">📲 <span class="hide-xs">Instalar app</span></button>`}
       <button class="btn btn-ghost btn-sm" id="btnSair">Sair</button>`;
     document.body.prepend(el);
     $("#btnSair", el).onclick = sair;
+    if (window.DDS.pronto) window.DDS.pronto();
   }
   function linksPorPerfil(perfil, atual) {
     const l = [];

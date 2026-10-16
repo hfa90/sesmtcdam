@@ -2,7 +2,28 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a4d32" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png" />
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="DDS SESMT" />
+  <meta name="application-name" content="DDS SESMT" />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-1170x2532.png" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-1179x2556.png" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-1290x2796.png" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-1284x2778.png" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-828x1792.png" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-750x1334.png" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-1125x2436.png" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-1640x2360.png" media="(device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-1620x2160.png" media="(device-width: 810px) and (device-height: 1080px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-1668x2388.png" media="(device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" />
+  <link rel="apple-touch-startup-image" href="assets/splash/splash-2048x2732.png" media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" />
   <title>FO-COR-SEG-001 · Lista de presença DDS</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet" />
@@ -46,6 +67,7 @@
 
   <script src="assets/js/config.js"></script>
   <script src="assets/js/app.js"></script>
+  <script src="assets/js/pwa.js"></script>
   <script>
   (async function () {
     const { esc, call, fmtData, fmtDataHora, fmtHora } = DDS;
@@ -98,12 +120,15 @@
       </table></section>`;
 
     const pag3 = `<section class="folha">${cab("3/3")}
-      <table class="f" style="margin-top:-1px"><tr><th colspan="5" style="text-align:left">Registro eletrônico de autenticidade</th></tr>
-        <tr><th>Matrícula</th><th>Nome</th><th>Data/hora (Manaus)</th><th>Método</th><th>Código de integridade (SHA-256)</th></tr>
-        ${ass.map((a) => `<tr><td>${esc(a.matricula)}</td><td>${esc(a.nome)}</td><td>${fmtDataHora(a.assinado_em)}</td><td>${a.metodo === "quiosque" ? "Dispositivo do supervisor" : "Dispositivo próprio"}</td><td class="mono">${esc(a.hash)}</td></tr>`).join("")}
+      <table class="f" style="margin-top:-1px"><tr><th colspan="7" style="text-align:left">Registro eletrônico de autenticidade</th></tr>
+        <tr><th>Foto (assinatura secundária)</th><th>Matrícula</th><th>Nome</th><th>Data/hora (Manaus)</th><th>Método</th><th>Conferência facial</th><th>Código de integridade (SHA-256)</th></tr>
+        ${ass.map((a) => `<tr><td class="center" style="width:70px">${a.foto ? `<img src="${a.foto}" alt="" style="width:52px;height:65px;object-fit:cover;border:1px solid #999">` : "—"}</td>
+          <td>${esc(a.matricula)}</td><td>${esc(a.nome)}</td><td>${fmtDataHora(a.assinado_em)}</td><td>${a.metodo === "quiosque" ? "Tablet do supervisor" : "Dispositivo próprio"}</td>
+          <td>${a.verificacao === "confirmada" ? "Confirmada pelo SESMT" : a.verificacao === "divergente" ? "DIVERGENTE" : "Pendente"}</td><td class="mono">${esc(a.hash)}</td></tr>`).join("")}
       </table>
       <div class="rodape">Identificador do DDS: ${esc(r.id)} · Aberto em ${fmtDataHora(r.criado_em)} · ${r.encerrada_em ? "Encerrado em " + fmtDataHora(r.encerrada_em) : "Em aberto"}<br>
-      Cada colaborador autenticou-se com matrícula e CPF e assinou manualmente na tela. Os registros são imutáveis no banco de dados.
+      Cada colaborador autenticou-se com matrícula e CPF, foi fotografado no momento da assinatura (foto carimbada com data/hora e matrícula) e assinou manualmente na tela.
+      A conferência facial é visual (comparação com a foto de referência), sem uso de inteligência artificial. Os registros são imutáveis no banco de dados.
       Documento gerado em ${fmtDataHora(new Date().toISOString())}.</div></section>`;
 
     document.getElementById("doc").innerHTML = pag1 + pag2 + pag3;

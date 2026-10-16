@@ -1,0 +1,25 @@
+{
+  "id": "./",
+  "name": "DDS SESMT · CD Manaus",
+  "short_name": "DDS SESMT",
+  "description": "Diálogo Diário de Segurança: temas semanais, lista de presença e assinatura eletrônica com foto.",
+  "lang": "pt-BR",
+  "start_url": "./index.html?origem=app",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#0a4d32",
+  "theme_color": "#0a4d32",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "assets/icons/icon-96.png", "sizes": "96x96", "type": "image/png" },
+    { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Assinar presença", "url": "./colaborador.html", "icons": [{ "src": "assets/icons/icon-96.png", "sizes": "96x96" }] },
+    { "name": "Conduzir DDS", "url": "./supervisor.html", "icons": [{ "src": "assets/icons/icon-96.png", "sizes": "96x96" }] }
+  ]
+}

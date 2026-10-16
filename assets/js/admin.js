@@ -34,14 +34,14 @@
   // =====================================================================
   // ROTEAMENTO
   // =====================================================================
-  const views = { painel, temasView, dds, colaboradores, relatorios };
-  const mapa = { painel: "painel", temas: "temasView", dds: "dds", colaboradores: "colaboradores", relatorios: "relatorios" };
+  const views = { painel, temasView, dds, facial, colaboradores, relatorios };
+  const mapa = { painel: "painel", temas: "temasView", dds: "dds", facial: "facial", colaboradores: "colaboradores", relatorios: "relatorios" };
   function ir(nome) {
     $$("#menu button").forEach((b) => b.classList.toggle("active", b.dataset.view === nome));
     limparCharts();
     view.innerHTML = `<div class="empty" style="padding:80px"><span class="spinner"></span></div>`;
     try { history.replaceState(null, "", "#" + nome); } catch (e) {}
-    views[mapa[nome]]().catch(erro);
+    views[mapa[nome]]().catch(erro).finally(() => DDS.pronto());
   }
   $$("#menu button").forEach((b) => (b.onclick = () => ir(b.dataset.view)));
 
@@ -253,8 +253,8 @@
       titulo: `DDS ${fmtData(r.data)} · ${r.supervisor_nome}`, grande: true,
       corpo: `<p><b>${esc(d.tema.titulo)}</b><br><span class="muted small">${fmtHora(r.horario)} · ${esc(r.local || "")} · código ${esc(r.codigo)} · ${r.status}</span></p>
         <div class="tabs"><button class="active" data-t="a">Assinaturas (${d.assinaturas.length})</button><button data-t="p">Pendentes da equipe (${d.pendentes.length})</button></div>
-        <div data-p="a">${d.assinaturas.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Colaborador</th><th>Setor</th><th>Assinatura</th><th>Data/hora</th></tr></thead><tbody>
-          ${d.assinaturas.map((a) => `<tr><td><b>${esc(a.nome)}</b><div class="small muted">${esc(a.matricula)} · ${esc(a.cargo || "")}</div></td><td class="small">${esc(a.setor || "")}</td><td><img class="sig" src="${a.assinatura}"></td>
+        <div data-p="a">${d.assinaturas.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Foto</th><th>Colaborador</th><th>Setor</th><th>Assinatura</th><th>Data/hora</th></tr></thead><tbody>
+          ${d.assinaturas.map((a) => `<tr><td>${a.foto ? `<img class="thumb" src="${a.foto}" alt="">` : "—"}${a.verificacao ? `<div class="small ${a.verificacao === "confirmada" ? "" : "muted"}">${a.verificacao === "confirmada" ? "✓ conferida" : "⚠ divergente"}</div>` : ""}</td><td><b>${esc(a.nome)}</b><div class="small muted">${esc(a.matricula)} · ${esc(a.cargo || "")}</div></td><td class="small">${esc(a.setor || "")}</td><td><img class="sig" src="${a.assinatura}"></td>
             <td class="small nowrap">${fmtDataHora(a.assinado_em)}<div class="muted">${a.metodo === "quiosque" ? "quiosque" : "próprio dispositivo"}</div></td></tr>`).join("")}</tbody></table></div>` : '<div class="empty">Sem assinaturas.</div>'}</div>
         <div data-p="p" class="hidden">${d.pendentes.length ? `<ul class="list-plain">${d.pendentes.map((p) => `<li><b>${esc(p.nome)}</b> <span class="small muted">${esc(p.matricula)} · ${esc(p.setor || "")}</span></li>`).join("")}</ul>` : '<div class="empty">Ninguém pendente.</div>'}</div>`,
       rodape: `<a class="btn" href="evidencia.html?id=${r.id}" target="_blank">Abrir evidência (FO-COR-SEG-001)</a>`,
@@ -262,6 +262,102 @@
       all.forEach((x) => x.classList.toggle("active", x === b));
       b.closest(".modal-body").querySelectorAll("[data-p]").forEach((p) => p.classList.toggle("hidden", p.dataset.p !== b.dataset.t));
     }));
+  }
+
+  // =====================================================================
+  // VERIFICAÇÃO FACIAL (conferência humana: foto do DDS x foto de referência)
+  // =====================================================================
+  async function facial() {
+    const [lista, cfg] = await Promise.all([temas(), call("adm_config")]);
+    const fotoObrig = (cfg.foto_obrigatoria || "true") === "true";
+    view.innerHTML = `
+      <div class="page-head"><div><div class="eyebrow">Assinatura secundária</div><h1>Verificação facial</h1>
+        <div class="muted small">Compare a foto tirada no DDS com a foto de referência do colaborador e registre a conferência. Sem IA: a validação é visual e fica registrada com seu nome, data e hora.</div></div>
+        <label class="check" style="max-width:300px"><input type="checkbox" id="vObrig" ${fotoObrig ? "checked" : ""}><span><b>Foto obrigatória na assinatura</b><br><span class="small muted">Sem foto, o colaborador não consegue assinar.</span></span></label></div>
+      <div class="grid grid-4" id="vKpis"></div>
+      <div class="card" style="margin-top:16px"><div class="row" style="align-items:flex-end">
+        <div style="flex:2;min-width:220px"><label>Tema</label><select id="vTema"><option value="">Todos os temas</option>${opcoesTemas(lista)}</select></div>
+        <div style="flex:1;min-width:160px"><label>Situação</label><select id="vStatus"><option value="pendente">Pendentes de conferência</option><option value="divergente">Divergentes</option><option value="confirmada">Confirmadas</option><option value="">Todas</option></select></div>
+        <button class="btn btn-ghost" id="vSelTodos">Selecionar todos</button>
+        <button class="btn" id="vConfSel" disabled>Confirmar selecionados</button></div></div>
+      <div id="vLista" style="margin-top:16px"><div class="empty"><span class="spinner"></span></div></div>`;
+    $("#vObrig").onchange = async (e) => {
+      try { await call("adm_config_salvar", { p_chave: "foto_obrigatoria", p_valor: e.target.checked ? "true" : "false" }); toast(e.target.checked ? "Foto agora é obrigatória." : "Foto agora é opcional.", "ok"); }
+      catch (err) { erro(err); e.target.checked = !e.target.checked; }
+    };
+    const sel = new Set();
+    const atualizarSel = () => { $("#vConfSel").disabled = !sel.size; $("#vConfSel").textContent = sel.size ? `Confirmar selecionados (${sel.size})` : "Confirmar selecionados"; };
+    async function carregar() {
+      sel.clear(); atualizarSel();
+      const d = await call("adm_verificacao_facial", { p_tema_id: $("#vTema").value || null, p_status: $("#vStatus").value, p_limite: 60 });
+      const s = d.resumo;
+      $("#vKpis").innerHTML = `
+        <div class="card kpi"><div class="label">Assinaturas com foto</div><div class="value">${s.com_foto}</div><div class="sub">de ${s.total} assinaturas</div></div>
+        <div class="card kpi"><div class="label">Pendentes</div><div class="value" style="color:${COR.warn}">${s.pendentes}</div><div class="sub">aguardando conferência</div></div>
+        <div class="card kpi"><div class="label">Confirmadas</div><div class="value" style="color:${COR.ok}">${s.confirmadas}</div></div>
+        <div class="card kpi"><div class="label">Divergentes</div><div class="value" style="color:${COR.bad}">${s.divergentes}</div><div class="sub">requer apuração</div></div>`;
+      const itens = d.itens;
+      if (!itens.length) { $("#vLista").innerHTML = `<div class="card empty">Nenhuma assinatura nesta situação.</div>`; return; }
+      $("#vLista").innerHTML = `<div class="verif-grid">${itens.map((a) => `
+        <div class="verif-card" data-id="${a.id}">
+          <div class="compare">
+            <figure>${a.foto_referencia ? `<img src="${a.foto_referencia}" alt="">` : `<div class="noimg">Sem referência</div>`}<figcaption>Referência</figcaption></figure>
+            <figure><img src="${a.foto}" alt=""><figcaption>DDS ${fmtData(a.data)}</figcaption></figure></div>
+          <div style="margin-top:10px"><div class="row between"><b>${esc(a.nome)}</b>${a.status === "confirmada" ? '<span class="chip chip-ok">Confirmada</span>' : a.status === "divergente" ? '<span class="chip chip-danger">Divergente</span>' : '<span class="chip chip-warn">Pendente</span>'}</div>
+            <div class="small muted">${esc(a.matricula)} · ${esc(a.setor || "")}<br>${esc(a.tema)} · Sup. ${esc(a.supervisor)}<br>${fmtDataHora(a.assinado_em)} · ${a.metodo === "quiosque" ? "tablet do supervisor" : "celular próprio"}</div>
+            ${a.verificado_em ? `<div class="small" style="margin-top:4px">Conferido por ${esc(a.verificado_por || "")} em ${fmtDataHora(a.verificado_em)}${a.observacao ? ` — “${esc(a.observacao)}”` : ""}</div>` : ""}
+            <img class="sig" src="${a.assinatura}" alt="assinatura" style="height:34px;margin-top:6px">
+          </div>
+          <div class="row" style="margin-top:10px">
+            <label class="check" style="flex:1"><input type="checkbox" data-sel="${a.id}"><span class="small">Selecionar</span></label>
+            <button class="btn btn-sm" data-ok="${a.id}">Confirmar</button>
+            <button class="btn btn-sm btn-danger" data-div="${a.id}">Divergente</button>
+            <button class="btn btn-sm btn-ghost" data-ref="${a.id}" data-colab="${a.colaborador_id}" title="Usar esta foto como nova referência">Usar como ref.</button>
+          </div></div>`).join("")}</div>
+        ${itens.length >= 60 ? '<p class="small muted center" style="margin-top:10px">Mostrando as 60 mais recentes. Confira e recarregue para ver as próximas.</p>' : ""}`;
+      $$("[data-sel]").forEach((c) => (c.onchange = () => { c.checked ? sel.add(c.dataset.sel) : sel.delete(c.dataset.sel); c.closest(".verif-card").classList.toggle("sel", c.checked); atualizarSel(); }));
+      $$("[data-ok]").forEach((b) => (b.onclick = () => verificar([b.dataset.ok], "confirmada")));
+      $$("[data-div]").forEach((b) => (b.onclick = () => divergente(b.dataset.div)));
+      $$("[data-ref]").forEach((b) => (b.onclick = async () => {
+        if (!(await confirmar("Usar esta foto como a nova referência do colaborador? A referência anterior fica guardada no histórico."))) return;
+        try { await call("adm_foto_referencia", { p_colaborador_id: b.dataset.colab, p_assinatura_id: b.dataset.ref }); toast("Foto de referência atualizada.", "ok"); carregar().catch(erro); } catch (e) { erro(e); }
+      }));
+    }
+    async function verificar(ids, status, obs) {
+      try { const n = await call("adm_verificar", { p_assinaturas: ids, p_status: status, p_observacao: obs || null }); toast(`${n} verificação(ões) registrada(s).`, "ok"); carregar().catch(erro); } catch (e) { erro(e); }
+    }
+    function divergente(id) {
+      const m = modal({ titulo: "Registrar divergência", corpo: `<p>Descreva o motivo (ex.: pessoa diferente da referência, foto de foto, rosto coberto).</p><textarea id="dObs" rows="3"></textarea>`,
+        rodape: `<button class="btn btn-ghost" data-x>Cancelar</button><button class="btn btn-danger" id="dOk">Marcar como divergente</button>` });
+      $("[data-x]", m.el).onclick = m.fechar;
+      $("#dOk", m.el).onclick = () => { const o = $("#dObs", m.el).value.trim(); if (!o) { toast("Informe o motivo.", "err"); return; } m.fechar(); verificar([id], "divergente", o); };
+    }
+    $("#vTema").onchange = () => carregar().catch(erro);
+    $("#vStatus").onchange = () => carregar().catch(erro);
+    $("#vSelTodos").onclick = () => { $$("[data-sel]").forEach((c) => { if (!c.checked) { c.checked = true; c.onchange(); } }); };
+    $("#vConfSel").onclick = async () => {
+      if (!(await confirmar(`Confirmar a conferência visual de ${sel.size} assinatura(s)?`))) return;
+      verificar([...sel], "confirmada");
+    };
+    await carregar();
+  }
+
+  function cadastrarFoto(c, aoSalvar) {
+    let cam;
+    const m = modal({
+      titulo: `Foto de referência · ${c.nome}`,
+      corpo: `<p class="small muted">Tire a foto com o colaborador presente. A foto anterior (se houver) fica guardada no histórico.</p><div id="fCam"></div>`,
+      rodape: `<button class="btn btn-ghost" data-x>Cancelar</button><button class="btn" id="fOk">Salvar referência</button>`,
+      onClose: () => cam && cam.parar(),
+    });
+    cam = DDS.FaceCapture($("#fCam", m.el), { legenda: () => `Referência · Mat. ${c.matricula} · ${fmtDataHora(new Date().toISOString())}` });
+    $("[data-x]", m.el).onclick = m.fechar;
+    $("#fOk", m.el).onclick = (ev) => {
+      if (!cam.foto()) { toast("Tire a foto primeiro.", "err"); return; }
+      comLoading(ev.currentTarget, async () => {
+        try { await call("adm_foto_referencia", { p_colaborador_id: c.id, p_foto: cam.foto() }); m.fechar(); toast("Foto de referência salva.", "ok"); aoSalvar && aoSalvar(); } catch (e) { erro(e); }
+      });
+    };
   }
 
   // =====================================================================
@@ -299,11 +395,12 @@
     const render = () => {
       const q = normalizar($("#bBusca").value), st = $("#bStatus").value, pf = $("#bPerfil").value, se = $("#bSetor").value;
       const f = lista.filter((c) => (!q || normalizar(c.nome).includes(q) || c.matricula.includes(q)) && (!st || (st === "ativo") === c.ativo) && (!pf || c.perfil === pf) && (!se || c.setor === se));
-      $("#bTabela").innerHTML = `<div class="table-wrap scroll-y" style="max-height:620px"><table class="tbl"><thead><tr><th>Matrícula</th><th>Nome</th><th>Cargo</th><th>Setor</th><th>Perfil</th><th>Status</th><th class="right">Assin.</th><th></th></tr></thead><tbody>
+      $("#bTabela").innerHTML = `<div class="table-wrap scroll-y" style="max-height:620px"><table class="tbl"><thead><tr><th>Matrícula</th><th>Nome</th><th>Cargo</th><th>Setor</th><th>Perfil</th><th>Status</th><th class="right">Assin.</th><th class="center">Foto</th><th></th></tr></thead><tbody>
         ${f.map((c) => `<tr><td class="mono">${esc(c.matricula)}</td><td><b>${esc(c.nome)}</b></td><td class="small">${esc(c.cargo || "")}</td><td class="small">${esc(c.setor || "")}</td>
           <td><span class="chip ${c.perfil === "admin" ? "chip-brand" : c.perfil === "supervisor" ? "chip-info" : "chip-muted"}">${perfilLabel(c.perfil)}</span></td>
           <td>${c.ativo ? '<span class="chip chip-ok">Ativo</span>' : `<span class="chip chip-danger">Desligado</span><div class="small muted">${fmtData((c.desligado_em || "").slice(0, 10))}</div>`}</td>
-          <td class="right">${c.assinaturas}</td><td class="right"><button class="btn btn-ghost btn-sm" data-id="${c.id}">Gerenciar</button></td></tr>`).join("")}</tbody></table></div>
+          <td class="right">${c.assinaturas}</td><td class="center">${c.tem_foto ? '<span class="chip chip-ok" title="Possui foto de referência">✓</span>' : '<span class="chip chip-muted">—</span>'}</td>
+          <td class="right"><button class="btn btn-ghost btn-sm" data-id="${c.id}">Gerenciar</button></td></tr>`).join("")}</tbody></table></div>
         <p class="small muted" style="margin-top:8px">${f.length} de ${lista.length} registros · ${lista.filter((c) => c.ativo).length} ativos</p>`;
       $$("#bTabela [data-id]").forEach((b) => (b.onclick = () => gerenciarColaborador(lista.find((c) => c.id === b.dataset.id))));
     };
@@ -315,10 +412,14 @@
   }
 
   async function gerenciarColaborador(c) {
-    const hist = await call("adm_historico", { p_colaborador_id: c.id });
+    const [hist, ft] = await Promise.all([call("adm_historico", { p_colaborador_id: c.id }), call("adm_colaborador_foto", { p_colaborador_id: c.id })]);
     const m = modal({
       titulo: c.nome, grande: true,
-      corpo: `<div class="grid grid-3"><div><div class="small muted">Matrícula</div><b class="mono">${esc(c.matricula)}</b></div><div><div class="small muted">Cargo</div><b>${esc(c.cargo || "")}</b></div><div><div class="small muted">Setor</div><b>${esc(c.setor || "")}</b></div></div>
+      corpo: `<div class="row" style="align-items:flex-start;gap:18px;flex-wrap:nowrap">
+        <div style="width:120px;flex:none"><div class="compare" style="grid-template-columns:1fr">${ft.foto ? `<figure><img src="${ft.foto}" alt=""><figcaption>Referência</figcaption></figure>` : `<figure><div class="noimg">Sem foto</div></figure>`}</div>
+          <button class="btn btn-ghost btn-sm btn-block" id="gFoto" style="margin-top:6px">📷 ${ft.foto ? "Atualizar" : "Cadastrar"}</button></div>
+        <div style="flex:1;min-width:0"><div class="grid grid-3"><div><div class="small muted">Matrícula</div><b class="mono">${esc(c.matricula)}</b></div><div><div class="small muted">Cargo</div><b>${esc(c.cargo || "")}</b></div><div><div class="small muted">Setor</div><b>${esc(c.setor || "")}</b></div></div>
+        <div class="small muted" style="margin-top:8px">${ft.historico.length} foto(s) de referência no histórico</div></div></div>
         <div class="grid grid-2" style="margin-top:16px">
           <div class="field"><label>Perfil de acesso</label><select id="gPerfil">${["colaborador", "supervisor", "admin"].map((p) => `<option value="${p}" ${c.perfil === p ? "selected" : ""}>${perfilLabel(p)}</option>`).join("")}</select>
             <div class="hint">${c.perfil_manual ? "Perfil definido manualmente (a importação não altera)." : "Perfil definido automaticamente pelo cargo."}</div></div>
@@ -330,6 +431,7 @@
       rodape: `<button class="btn btn-ghost" data-x>Fechar</button><button class="btn" id="gOk">Salvar alterações</button>`,
     });
     $("[data-x]", m.el).onclick = m.fechar;
+    $("#gFoto", m.el).onclick = () => cadastrarFoto(c, () => { m.fechar(); gerenciarColaborador(c).catch(erro); });
     $("#gOk", m.el).onclick = (ev) => comLoading(ev.currentTarget, async () => {
       const ativo = $("#gAtivo", m.el).value === "1", perfil = $("#gPerfil", m.el).value;
       if (!ativo && c.ativo && !(await confirmar(`Confirmar o desligamento de <b>${esc(c.nome)}</b>? As assinaturas já coletadas serão mantidas.`, { perigo: true, ok: "Desligar" }))) return;
@@ -337,7 +439,7 @@
     });
   }
   function eventoLabel(e) {
-    return { admissao: "Inclusão na base", desligamento: "Desligamento", readmissao: "Readmissão / reativação", mudanca_setor: "Mudança de setor", mudanca_cargo: "Mudança de cargo", mudanca_nome: "Correção de nome", mudanca_cpf: "CPF atualizado", mudanca_perfil: "Mudança de perfil" }[e] || e;
+    return { foto_referencia: "Foto de referência cadastrada", admissao: "Inclusão na base", desligamento: "Desligamento", readmissao: "Readmissão / reativação", mudanca_setor: "Mudança de setor", mudanca_cargo: "Mudança de cargo", mudanca_nome: "Correção de nome", mudanca_cpf: "CPF atualizado", mudanca_perfil: "Mudança de perfil" }[e] || e;
   }
 
   function formColaborador() {

@@ -23,6 +23,26 @@ Login de todos: **usuário = matrícula**, **senha = CPF** (com ou sem pontuaç�
 4. O supervisor **encerra** o DDS assinando o visto do instrutor.
 5. A evidência é gerada no formato **FO-COR-SEG-001** (lista de presença, atividades e registro eletrônico com hash SHA-256) para imprimir ou salvar em PDF.
 
+## Verificação facial (assinatura secundária, sem IA)
+
+- No momento da assinatura (celular próprio ou tablet do supervisor) o colaborador tira uma **foto pela câmera frontal**. A foto recebe um carimbo com código do DDS, matrícula, data e hora, e entra no hash de integridade da assinatura.
+- O sistema checa só a **qualidade da imagem** (brilho, contraste e nitidez), com cálculo simples sobre os pixels. **Não há inteligência artificial nem reconhecimento automático.**
+- A **primeira foto** de cada colaborador vira a **foto de referência**. O SESMT também pode cadastrar ou atualizar a referência pela câmera, em *Colaboradores → Gerenciar*.
+- No **modo quiosque**, o supervisor vê a foto de referência ao lado da câmera e confirma que conferiu visualmente a pessoa.
+- No painel **Verificação facial**, o SESMT compara a foto do DDS com a referência e marca *Confirmada* ou *Divergente*. A conferência fica registrada com nome, data e hora e não pode ser apagada.
+- A foto pode ser **obrigatória** ou **opcional** (chave na tela de Verificação facial).
+
+> LGPD: imagem facial usada para identificação é dado pessoal sensível (art. 11). Valide com o Jurídico/DPO a base legal, o aviso aos colaboradores e o prazo de guarda. O termo de declaração na tela já informa a finalidade (comprovação de presença).
+
+## App instalável (Android e iOS)
+
+O sistema é um **PWA**: abre em tela cheia, com ícone e tela de carregamento próprios, sem precisar de loja.
+
+- **Android (Chrome):** botão *📲 Instalar app* ou menu ⋮ → *Instalar app*.
+- **iPhone/iPad (Safari):** *Compartilhar* ⬆︎ → *Adicionar à Tela de Início*.
+- O app funciona no celular, no tablet do supervisor (modo quiosque, inclusive na horizontal) e no computador.
+- As telas ficam guardadas para abrir rápido. As assinaturas exigem internet: se a conexão cair, o app avisa.
+
 ## Proteção das evidências
 
 - Assinaturas são **imutáveis** (gatilho no banco bloqueia UPDATE/DELETE).

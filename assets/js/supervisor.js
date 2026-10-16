@@ -23,6 +23,7 @@
         <div class="card kpi"><div class="label">DDS no mês</div><div class="value">${doMes.length}</div><div class="sub">${doMes.reduce((n, r) => n + r.assinaturas, 0)} assinaturas</div></div>
         <div class="card kpi"><div class="label">Abertos agora</div><div class="value">${painel.reunioes.filter((r) => r.status === "aberta" && r.data === DDS.hojeISO()).length}</div><div class="sub">DDS aguardando assinaturas</div></div>`;
       renderLista();
+      DDS.pronto();
       if (!ativoId) {
         const aberta = painel.reunioes.find((r) => r.status === "aberta" && r.data === DDS.hojeISO());
         if (aberta) abrirReuniao(aberta.id);
@@ -71,7 +72,11 @@
     ultimaQtd = -1;
     clearInterval(timer);
     await renderReuniao(true);
-    timer = setInterval(() => { if (!document.hidden) renderReuniao(false); }, 8000);
+    // verificação leve (só a contagem); recarrega fotos/assinaturas apenas quando alguém assina
+    timer = setInterval(async () => {
+      if (document.hidden || !ativoId || document.querySelector(".modal-back")) return;
+      try { const n = await call("reuniao_contagem", { p_reuniao_id: ativoId }); if (n !== ultimaQtd) renderReuniao(false); } catch (e) {}
+    }, 6000);
   }
 
   let ultimaQtd = -1;
@@ -81,7 +86,6 @@
     try { d = await call("reuniao_detalhe", { p_reuniao_id: ativoId }); } catch (e) { erro(e); return; }
     const r = d.reuniao, t = d.tema, ass = d.assinaturas, pend = d.pendentes;
     const aberta = r.status === "aberta" && r.data === DDS.hojeISO();
-    if (!rolar && ultimaQtd === ass.length && aberta) return; // nada mudou
     if (ultimaQtd >= 0 && ass.length > ultimaQtd && !rolar) toast(`${ass[ass.length - 1].nome} assinou`, "ok");
     ultimaQtd = ass.length;
     const equipe = ass.length + pend.length;
@@ -108,6 +112,7 @@
           ${equipe ? `<div class="bar"><span style="width:${pct(ass.length, equipe)}%"></span></div>` : ""}
           <div class="tabs" style="margin-top:14px"><button class="active" data-t="ass">Assinaram (${ass.length})</button><button data-t="pend">Pendentes da equipe (${pend.length})</button></div>
           <div data-p="ass" class="scroll-y">${ass.length ? `<table class="tbl"><tbody>${ass.map((a) => `<tr>
+              <td style="width:50px">${a.foto ? `<img class="thumb" src="${a.foto}" alt="foto">` : '<span class="chip chip-muted">sem foto</span>'}</td>
               <td><b>${esc(a.nome)}</b><div class="small muted">${esc(a.matricula)} · ${esc(a.cargo || "")}</div></td>
               <td><img class="sig" src="${a.assinatura}" alt="assinatura"></td>
               <td class="small muted nowrap">${fmtDataHora(a.assinado_em).slice(11)}${a.metodo === "quiosque" ? "<br>quiosque" : ""}</td></tr>`).join("")}</tbody></table>`
@@ -133,38 +138,92 @@
 
   // ---------- Modo quiosque (colaborador assina no dispositivo do supervisor) ----------
   function quiosque(r, t) {
+    let cam = null, registrados = 0;
     const m = modal({
-      titulo: "Modo quiosque · assinatura no dispositivo do supervisor",
-      grande: true,
-      corpo: `<div class="alert alert-info">Entregue o dispositivo ao colaborador. Ele informa a própria matrícula e CPF e assina. Tema: <b>${esc(t.titulo)}</b></div>
+      titulo: "Modo quiosque · assinatura no tablet do supervisor",
+      grande: true, rodape: false,
+      corpo: `<div class="row between" style="margin-bottom:6px"><div class="small muted">Tema: <b>${esc(t.titulo)}</b></div><span class="chip chip-ok" id="qCont">0 registrados nesta sessão</span></div><div id="qEtapa"></div>`,
+      onClose: () => { if (cam) cam.parar(); renderReuniao(false); },
+    });
+    const etapa = $("#qEtapa", m.el);
+
+    function passo1(msg) {
+      if (cam) { cam.parar(); cam = null; }
+      etapa.innerHTML = `<div class="steps"><span class="on"></span><span></span><span></span></div>
+        ${msg || ""}
+        <h3>Identificação do colaborador</h3>
         <form id="qForm" autocomplete="off"><div class="grid grid-2">
           <div class="field"><label>Matrícula</label><input type="text" id="qMat" inputmode="numeric" autocomplete="off"></div>
           <div class="field"><label>CPF</label><input type="password" id="qCpf" inputmode="numeric" placeholder="000.000.000-00" autocomplete="new-password"></div></div>
-          <label>Assinatura do colaborador</label><div id="qPad"></div>
-          <div class="row" style="margin-top:6px"><button type="button" class="btn btn-ghost btn-sm" id="qLimpar">Limpar</button></div>
-          <label class="check" style="margin-top:14px"><input type="checkbox" id="qDecl"><span>Declaro que participei deste DDS e compreendi as orientações de segurança apresentadas.</span></label>
-        </form><div id="qMsg" style="margin-top:12px"></div>`,
-      rodape: `<button class="btn btn-ghost" data-x>Fechar quiosque</button><button class="btn btn-lg" id="qOk">Registrar assinatura</button>`,
-      onClose: () => renderReuniao(false),
-    });
-    DDS.mascaraCPF($("#qCpf", m.el));
-    const pad = SignaturePad($("#qPad", m.el));
-    $("#qLimpar", m.el).onclick = () => pad.limpar();
-    $("[data-x]", m.el).onclick = m.fechar;
-    $("#qOk", m.el).onclick = (ev) => {
-      const mat = $("#qMat", m.el).value.trim(), cpf = $("#qCpf", m.el).value;
-      if (!mat || cpf.replace(/\D/g, "").length !== 11) { toast("Informe matrícula e CPF completos.", "err"); return; }
-      if (!$("#qDecl", m.el).checked) { toast("Marque a declaração de participação.", "err"); return; }
-      if (pad.vazio()) { toast("Assinatura obrigatória.", "err"); return; }
-      comLoading(ev.currentTarget, async () => {
-        try {
-          const res = await call("sup_assinar_quiosque", { p_reuniao_id: r.id, p_matricula: mat, p_cpf: cpf, p_assinatura: pad.paraPNG(), p_user_agent: navigator.userAgent + " [quiosque]" });
-          $("#qMsg", m.el).innerHTML = `<div class="alert alert-ok">✓ Presença de <b>${esc(res.nome)}</b> registrada às ${fmtDataHora(res.assinado_em).slice(11)}. Próximo colaborador.</div>`;
-          $("#qMat", m.el).value = ""; $("#qCpf", m.el).value = ""; $("#qDecl", m.el).checked = false; pad.limpar(); $("#qMat", m.el).focus();
-        } catch (e) { $("#qMsg", m.el).innerHTML = `<div class="alert alert-danger">${esc(DDS.msgErro(e))}</div>`; }
-      });
-    };
-    setTimeout(() => $("#qMat", m.el).focus(), 50);
+          <div class="row"><button class="btn btn-ghost" type="button" data-x>Fechar quiosque</button><button class="btn btn-lg" id="qIdent" style="flex:1">Continuar</button></div></form>`;
+      DDS.mascaraCPF($("#qCpf", etapa));
+      $("[data-x]", etapa).onclick = m.fechar;
+      $("#qForm", etapa).onsubmit = (ev) => {
+        ev.preventDefault();
+        const mat = $("#qMat", etapa).value.trim(), cpf = $("#qCpf", etapa).value;
+        if (!mat || cpf.replace(/\D/g, "").length !== 11) { toast("Informe matrícula e CPF completos.", "err"); return; }
+        comLoading($("#qIdent", etapa), async () => {
+          try {
+            const p = await call("sup_identificar", { p_reuniao_id: r.id, p_matricula: mat, p_cpf: cpf });
+            if (p.ja_assinou) { passo1(`<div class="alert alert-warn"><b>${esc(p.nome)}</b> já assinou este tema.</div>`); return; }
+            passo2(p, mat, cpf);
+          } catch (e) { passo1(`<div class="alert alert-danger">${esc(DDS.msgErro(e))}</div>`); }
+        });
+      };
+      setTimeout(() => { const i = $("#qMat", etapa); i && i.focus(); }, 60);
+    }
+
+    function passo2(p, mat, cpf) {
+      etapa.innerHTML = `<div class="steps"><span class="on"></span><span class="on"></span><span></span></div>
+        <div class="row between"><div><h3 style="margin:0">${esc(p.nome)}</h3><div class="small muted">Mat. ${esc(p.matricula)} · ${esc(p.cargo || "")} · ${esc(p.setor || "")}</div></div>
+          <button class="btn btn-ghost btn-sm" id="qVoltar">Não sou eu</button></div>
+        <div class="grid grid-2" style="margin-top:14px;align-items:start">
+          <div><label>Foto de verificação ${p.foto_obrigatoria ? "(obrigatória)" : "(opcional)"}</label><div id="qCam"></div></div>
+          <div><label>Foto de referência</label>
+            <div class="compare" style="grid-template-columns:1fr">${p.foto_referencia ? `<figure><img src="${p.foto_referencia}" alt="referência"><figcaption>Cadastro</figcaption></figure>`
+              : `<figure><div class="noimg">Sem foto de referência.<br>A foto de hoje será a referência.</div></figure>`}</div></div>
+        </div>
+        <div style="margin-top:16px"><label>Assinatura do colaborador</label><div id="qPad"></div>
+          <div class="row" style="margin-top:6px"><button type="button" class="btn btn-ghost btn-sm" id="qLimpar">Limpar</button></div></div>
+        <label class="check" style="margin-top:14px"><input type="checkbox" id="qDecl"><span>Eu, <b>${esc(p.nome)}</b>, declaro que participei deste DDS, compreendi as orientações e autorizo o registro da minha imagem como comprovação de presença.</span></label>
+        ${p.foto_referencia ? `<label class="check" style="margin-top:10px"><input type="checkbox" id="qConf"><span><b>Supervisor:</b> conferi visualmente que a pessoa na câmera é o colaborador da foto de referência.</span></label>` : ""}
+        <div class="row" style="margin-top:16px"><button class="btn btn-ghost" id="qCanc">Cancelar</button><button class="btn btn-lg" id="qOk" style="flex:1">Registrar assinatura</button></div>`;
+      cam = DDS.FaceCapture($("#qCam", etapa), { legenda: () => `DDS ${r.codigo} · Mat. ${p.matricula} · ${fmtDataHora(new Date().toISOString())}` });
+      const pad = SignaturePad($("#qPad", etapa));
+      $("#qLimpar", etapa).onclick = () => pad.limpar();
+      $("#qVoltar", etapa).onclick = () => passo1();
+      $("#qCanc", etapa).onclick = () => passo1();
+      $("#qOk", etapa).onclick = (ev) => {
+        if (p.foto_obrigatoria && !cam.foto()) { toast("Tire a foto de verificação.", "err"); return; }
+        if (pad.vazio()) { toast("Assinatura obrigatória.", "err"); return; }
+        if (!$("#qDecl", etapa).checked) { toast("O colaborador precisa marcar a declaração.", "err"); return; }
+        if ($("#qConf", etapa) && !$("#qConf", etapa).checked) { toast("Confirme a conferência visual da foto.", "err"); return; }
+        comLoading(ev.currentTarget, async () => {
+          try {
+            const foto = cam.foto();
+            const res = await call("sup_assinar_quiosque", { p_reuniao_id: r.id, p_matricula: mat, p_cpf: cpf, p_assinatura: pad.paraPNG(), p_foto: foto,
+              p_user_agent: navigator.userAgent + ($("#qConf", etapa) ? " [quiosque; conferido pelo supervisor]" : " [quiosque]") });
+            cam.parar(); registrados++;
+            $("#qCont", m.el).textContent = `${registrados} registrado(s) nesta sessão`;
+            passo3(res, foto, p.foto_referencia);
+          } catch (e) { toast(DDS.msgErro(e), "err"); }
+        });
+      };
+    }
+
+    function passo3(res, foto, ref) {
+      etapa.innerHTML = `<div class="steps"><span class="on"></span><span class="on"></span><span class="on"></span></div>
+        <div class="success-burst"><div class="ic">✓</div><h2>Presença registrada</h2>
+          <p><b>${esc(res.nome)}</b> · ${fmtDataHora(res.assinado_em)}</p></div>
+        ${foto ? `<div class="compare" style="max-width:420px;margin:0 auto 16px">
+          <figure>${ref ? `<img src="${ref}" alt="">` : `<div class="noimg">Primeira foto</div>`}<figcaption>Referência</figcaption></figure>
+          <figure><img src="${foto}" alt=""><figcaption>Hoje</figcaption></figure></div>` : ""}
+        <button class="btn btn-lg btn-block" id="qProx">Próximo colaborador</button>`;
+      $("#qProx", etapa).onclick = () => passo1();
+      $("#qProx", etapa).focus();
+    }
+
+    passo1();
   }
 
   // ---------- Encerrar com visto do instrutor ----------
